@@ -8,17 +8,50 @@
  * 
  */
 
+#include <FastLED.h>
+
+#define NUM_LEDS 12
+#define DATA_PIN 4
 #define M1 5  // Motor A pins
-#define M2 6
+#define M2 4
 
 #define FORWARD     1
 #define BACKWARD    2
 #define STOP        0
 
+CRGB leds[NUM_LEDS];
+
+#define BRIGHTER 1
+#define DIMMER 2
+#define BREAK 0
+
+int glowValue = 0;
+int glowState = BRIGHTER;
+int changeColour = 0;
+
+#define NUMOFCOLOURS  4
+
+CRGB colourPalette[NUMOFCOLOURS];
+
+
+
 
 int incomingByte = 0; // for incoming serial data
 
 void setup() {
+
+  colourPalette[0] = CHSV(215,255,255);
+  colourPalette[1] = CHSV(110,255,255);
+  colourPalette[2] = CRGB::Red;
+  colourPalette[3] = CHSV(145,255,255);
+//  colourPalette[4] = CRGB::Blue;
+//  colourPalette[5] = CRGB::Indigo;
+//  colourPalette[6] = CRGB::Silver;
+//  colourPalette[7] = CRGB::Amethyst;
+//  colourPalette[8] = CRGB::Aqua;
+//  colourPalette[9] = CRGB::Fuchsia;
+  
+  
 
   pinMode(M1, OUTPUT);
   pinMode(M2, OUTPUT);
@@ -40,6 +73,12 @@ void setup() {
   Serial.println("e.backward3");
   Serial.println("r.backward4");
   Serial.println("t.backward5");
+
+  FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);  // GRB ordering is typical
+  for(int i=0; i < NUM_LEDS;i++) {
+    leds[i] = CRGB::Red;
+  }
+
 
 }
 int  input = 0;
@@ -106,10 +145,51 @@ void loop() {
       move(FORWARD, 5);
       Serial.print("Forwards 5\n");
       break;
-  }
-  delay(200);
+    }
   incomingByte=0;
-}
+  }
+
+  switch( glowState) {
+    case BRIGHTER:
+      if(glowValue < 255) {
+        glowValue++;
+        FastLED.setBrightness(glowValue);
+        FastLED.show();
+      } else {
+        glowState = DIMMER;
+      }
+      break;
+    case DIMMER:
+      if(glowValue > 0) {
+        glowValue--;
+        FastLED.setBrightness(glowValue);
+        FastLED.show();
+      } else {
+        glowState = BREAK;
+      }
+      break;
+    case BREAK:
+      if(glowValue < 30) {
+        glowValue++;
+      } else {
+        glowState = BRIGHTER;
+        glowValue = 0;
+        for(int i=0; i < NUM_LEDS;i++) {
+          leds[i] = colourPalette[changeColour % NUMOFCOLOURS];//CHSV((10*changeColour)%255,255,255);//colourPalette[changeColour % NUMOFCOLOURS];
+          //Serial.print((10*changeColour)%255);
+
+        }
+        changeColour++;
+      }
+      break;
+  
+    
+  }
+//  changeColour++;
+//  for(int i=0; i < NUM_LEDS;i++) {
+//    leds[i] = CHSV((changeColour/10) % 255,255,255);
+//  }
+  delay(5);
 }
 
 // Control motor direction and speed

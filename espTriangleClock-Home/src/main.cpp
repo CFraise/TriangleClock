@@ -111,27 +111,6 @@ void setup() {
   statusTemp    = setupTempSensor();
   statusAccel   = setupAccel();
   statusRTC     = setupRTC();
-  // display.setCursor(0,0);
-  // // for(int i=127; i >=0; i--)
-  // // {
-  // //   leds[21] = ColorFromPalette(currentPalette, i);
-  // //   leds[22] = ColorFromPalette(currentPalette, i);
-  // //   leds[23] = ColorFromPalette(currentPalette, i);
-  // //   leds[24] = ColorFromPalette(currentPalette, i);
-  // //   FastLED.show();
-  // // }
-  // // delay(2000);
-  // for(int i=0; i <= 200; i++)
-  // {
-  //   leds[0] = ColorFromPalette(currentPalette, i);
-  //   leds[1] = ColorFromPalette(currentPalette, i);
-  //   leds[2] = ColorFromPalette(currentPalette, i);
-  //   leds[3] = ColorFromPalette(currentPalette, i);
-  //   leds[4] = ColorFromPalette(currentPalette, i);
-  //   leds[5] = ColorFromPalette(currentPalette, i);
-  //   FastLED.show();
-  //   delay(50);
-  // }
   updateLEDstatus();
   statusWifi    = setupOTA();
   updateLEDstatus();

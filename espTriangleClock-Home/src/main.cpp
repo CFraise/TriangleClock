@@ -79,6 +79,8 @@ int setupRTC();
 int setupMotor();
 int setupOTA();
 void updateLEDstatus();
+void pointAccelDown();
+float readAccel(int numOfReads);
 
 
 void setup() {
@@ -114,6 +116,9 @@ void setup() {
   updateLEDstatus();
   statusWifi    = setupOTA();
   updateLEDstatus();
+
+  pointAccelDown();
+
 
   //NTP
   timeClient.begin(); 
@@ -344,9 +349,97 @@ void updateLEDstatus()
       FastLED.show();
       delay(3);
     }
-
-
   }
+}
+
+//Uses the accelerometer and motors to position the clock upright, flashing the lights to indicate the direction it is going
+void pointAccelDown()
+{
+  float calcBright = 0;
+  int direction = FORWARD;
+  int flashIndex = 0;
+  bool finished = false;
+  unsigned long int startMillis = millis();
+
+  int moveStepperFlag = 0;
+  int checkAccelFlag = 1;
+  int stateMachine = 1;
+
+  float accelRead = 0; //Latest accelerometer reading
+  float prevAccelRead = 0; //Previous Accelerometer reading
+  float prev2AccelRead = 0; //The reading before the previous accelerometer reading
+
+  while(!finished && millis() <= (startMillis+30000))
+  {
+    if(checkAccelFlag)
+    {
+    accelRead = readAccel(3);
+    switch(stateMachine)
+    {
+      case 1:
+        test;
+        break;
+      case 2:
+        test;
+        break;
+      case 3:
+        test;
+        break;
+      case 4:
+        test;
+        break;
+      case 5:
+        test;
+        break;
+    }
+    prev2AccelRead = prevAccelRead;
+    prevAccelRead = accelRead;
+    checkAccelFlag = 0;
+    }
+
+    if(moveStepperFlag > 0) {
+      myMotor->onestep(direction, DOUBLE);
+      moveStepperFlag--;
+      if(moveStepperFlag == 0)
+        checkAccelFlag = 1;
+    }
 
 
+    for(int i=0; i < 7; i++)
+    {
+      calcBright = beatsin8(20,0,255, 0, -13*i)*max(1.0, ((i+4)/9.0));
+      if(i == 6) {
+        calcBright += 140;
+        if( calcBright > 255)
+          calcBright = 255;
+
+      }
+      leds[7+i] = CHSV( 0 ,255,(int) calcBright);
+      leds[20-i] = leds[7+i];
+    }
+
+    FastLED.show();
+    yield();
+    ArduinoOTA.handle();
+  }
+}
+
+// readAccel will read the accelerometer x amount of times and average the result of the y value
+// input: numOfReads is an int saying how many reads to average across
+// output: the averaged value in m/s^2 (negative of it so that gravity is higher)
+float readAccel(int numOfReads)
+{
+  sensors_event_t event;
+  accel.getEvent(&event);
+
+  float accelValueY = 0;
+
+  for(int i=0; i<numOfReads; i++)
+  {
+    accel.getEvent(&event);
+    accelValueY += event.acceleration.y;
+  }
+  accelValueY /= numOfReads;
+
+  return accelValueY;
 }

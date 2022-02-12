@@ -359,55 +359,147 @@ void updateLEDstatus()
   }
 }
 
+#define HISPEED     500
+#define MEDSPEED    200
+#define SLOWSPEED   100
+#define STARTSPEED  200
+
 //Uses the accelerometer and motors to position the clock upright, flashing the lights to indicate the direction it is going
 void pointAccelDown()
 {
-  float calcBright = 0;
-  int direction = FORWARD;
-  int flashIndex = 0;
   bool finished = false;
-  unsigned long int startMillis = millis();
-
   int moveStepperFlag = 0;
   int checkAccelFlag = 1;
-  int stateMachine = 1;
+  int stateMachine = 0;
 
+  int direction = FORWARD;
+  int moveType = DOUBLE;
+  int numOfReads = 3;
+  int speed = 1;
   float accelRead = 0; //Latest accelerometer reading
   float prevAccelRead = 0; //Previous Accelerometer reading
   float prev2AccelRead = 0; //The reading before the previous accelerometer reading
 
-  while(!finished && millis() <= (startMillis+30000))
+  float calcBright = 0;
+  unsigned long int startMillis = millis();
+
+  while(!finished && millis() <= (startMillis+60000))
   {
-    if(checkAccelFlag)
+    if(checkAccelFlag && moveStepperFlag == 0)
     {
-    accelRead = readAccel(3);
-    switch(stateMachine)
-    {
-      case 1:
-        test;
-        break;
-      case 2:
-        test;
-        break;
-      case 3:
-        test;
-        break;
-      case 4:
-        test;
-        break;
-      case 5:
-        test;
-        break;
-    }
-    prev2AccelRead = prevAccelRead;
-    prevAccelRead = accelRead;
-    checkAccelFlag = 0;
+      delay(1000);
+      accelRead = readAccel(numOfReads);
+      if(accelRead < 5)       speed = HISPEED;
+      else if(accelRead < 9)  speed = MEDSPEED;
+      else                    speed = SLOWSPEED;
+
+      switch(stateMachine)
+      {
+        case 0: // Read accel and try moving forward
+          Serial.print("State 0 - Try moving somewhere\nStarting Acceleration: ");
+          Serial.println(accelRead);
+          prevAccelRead = accelRead;
+          moveStepperFlag = STARTSPEED;
+          checkAccelFlag = 0;
+          stateMachine++;
+          break;
+        case 1: // Finished test direction, see if it was a good choice
+          Serial.print("State 1 - Finished test move, was the direction correct?\nAcceleration: ");
+          Serial.println(accelRead);
+          if(accelRead > prevAccelRead) //Going the right way
+          {
+            Serial.println("It was correct, continuing in this direction...");
+            stateMachine = 3;
+            moveStepperFlag = speed;
+            checkAccelFlag = 0;
+          } else {
+            Serial.println("Accel went down, trying the other direction...");
+            stateMachine = 2;
+            direction = BACKWARD;
+            moveStepperFlag = STARTSPEED;
+            checkAccelFlag = 2;
+          }
+          prev2AccelRead = prevAccelRead;
+          prevAccelRead = accelRead;
+          break;
+        case 2:
+          Serial.println("State 2 - Test that reversing direction increases accel value (otherwise board is horizontal or pointing down already and we are done");
+          if(checkAccelFlag == 2)
+          {
+            Serial.print("1st read: ");
+            Serial.println(accelRead);
+            moveStepperFlag = STARTSPEED;
+          } else {
+            Serial.print("2nd read: ");
+            Serial.println(accelRead);
+            if(accelRead > prevAccelRead && prevAccelRead > prev2AccelRead)
+            {
+              Serial.println("Now moving in the correction direction, moving to state 3...");
+              stateMachine = 3;
+              moveStepperFlag = speed;
+            } else if(prevAccelRead > accelRead && prevAccelRead > prev2AccelRead) {
+              Serial.println("Starting spot was pointing down, entering final tuning state 4...");
+              stateMachine = 4;
+              direction = FORWARD;
+              moveStepperFlag = 1;
+            } else {
+              Serial.println("accel reads don't make sense, the board is probably horizontal or something, exiting this function...");
+              finished = true;
+            }
+          }
+          checkAccelFlag = 0;
+          prev2AccelRead = prevAccelRead;
+          prevAccelRead = accelRead;
+          break;
+        case 3:
+          if(accelRead > prevAccelRead)
+          {
+            Serial.print("State 3 - Keep on moving...\nAccel: ");
+            Serial.println(accelRead);
+            moveStepperFlag = speed;
+          } else {
+            Serial.print("State 3 - Moved past down, time to fine tune...\nAccel: ");
+            Serial.println(accelRead);
+            // Reverse direction
+            if(direction == FORWARD)  direction = BACKWARD;
+            else                      direction = FORWARD;
+            moveStepperFlag = 1;
+            stateMachine = 4;
+            moveType = MICROSTEP;
+            numOfReads = 50;
+          }
+          checkAccelFlag = 0;
+          prev2AccelRead = prevAccelRead;
+          prevAccelRead = accelRead;
+          break;
+        case 4:
+          Serial.print("State 4 - Move 1 step at a time until you've found the minimum value...\nAccel: ");
+          Serial.print(accelRead);
+          if(accelRead > prevAccelRead)
+          { //keep inching
+            moveStepperFlag = 1;
+          } else {
+            Serial.println("Previous direction was the max acceleration, move back there and finish...");
+            // Reverse direction
+            if(direction == FORWARD)  direction = BACKWARD;
+            else                      direction = FORWARD;
+            moveStepperFlag = 1;
+            stateMachine = 5;
+          }
+          break;
+        case 5:
+          Serial.print("Youre done!\nAccel: ");
+          Serial.print(accelRead);
+          myMotor->release();
+          finished = true;
+          break;
+      }
     }
 
     if(moveStepperFlag > 0) {
-      myMotor->onestep(direction, DOUBLE);
+      myMotor->onestep(direction, moveType);
       moveStepperFlag--;
-      if(moveStepperFlag == 0)
+      if(moveStepperFlag == 0 && checkAccelFlag != 2)
         checkAccelFlag = 1;
     }
 

@@ -18,15 +18,23 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_ADXL343.h>
 #include <FastLED.h>
+#include <time.h>
 
 #define LED_PIN     13
 #define NUM_LEDS    45
 #define BRIGHTNESS  255
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
+#define LED_FRAMEMS 10
+int lastMillisLEDloop = 0;
 CRGB leds[NUM_LEDS];
 
 #define RPM_START   20
+
+#define DAYLIGHTSAVINGS 0
+int hours_now;
+int minutes_now;
+int seconds_now;
 
 TBlendType    currentBlending;
 
@@ -46,7 +54,8 @@ extern const TProgmemPalette16 myRedWhiteBluePalette_p PROGMEM;
 Adafruit_ADXL343 accel = Adafruit_ADXL343(12345);
 RV8803 rtc;
 Adafruit_MotorShield AFMS = Adafruit_MotorShield(0x42);
-Adafruit_StepperMotor *myMotor = AFMS.getStepper(1024, 1);
+#define NUMOFMOTORSTEPS 1024
+Adafruit_StepperMotor *myMotor = AFMS.getStepper(NUMOFMOTORSTEPS, 1);
 S5851A sensor(0x4E);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -60,9 +69,14 @@ const char* password = "604osensa";
 #define BUTTON_B  16
 #define BUTTON_C  2
 #define SW_TOG    14
+#define RTCINT_PIN  12
 
-bool microstepFlag = false;
-int microstepCounter = 0;
+int orientationStepCounter = 0;
+int orientationDirectionMove = FORWARD;
+#define MORNING 0
+#define MIDDAY  1
+#define NIGHT   2
+int orientationNow = MIDDAY;
 
 int statusWifi = 0;
 int statusAccel = 0;
@@ -78,6 +92,11 @@ int setupOTA();
 void updateLEDstatus();
 void pointAccelDown();
 float readAccel(int numOfReads);
+void updateTime();
+void updateLEDs();
+void setLEDsToTime();
+void turnOffLEDs(int startIndex, int endIndex);
+void initialMove();
 
 
 
@@ -113,53 +132,60 @@ void setup() {
   updateLEDstatus();
   statusWifi    = setupOTA();
   updateLEDstatus();
-
-  // Serial.println("Accelerometer noise test -> 1 read/time");
-  // for(int i=0;i<10;i++) {
-  // Serial.println(readAccel(1));
-  // delay(100);
-  // }
-  // delay(2000);
-  // Serial.println("Accelerometer noise test -> 3 read/time");
-  // for(int i=0;i<10;i++) {
-  // Serial.println(readAccel(3));
-  // delay(100);
-  // }
-  // delay(2000);
-
-  // Serial.println("Accelerometer noise test -> 5 read/time");
-  // for(int i=0;i<10;i++) {
-  // Serial.println(readAccel(5));
-  // delay(100);
-  // }
-  // delay(2000);
-
-  // Serial.println("Accelerometer noise test -> 10 read/time");
-  // for(int i=0;i<10;i++) {
-  // Serial.println(readAccel(10));
-  // delay(100);
-  // }
-
-  // delay(2000);
-
   pointAccelDown();
 
+  if(statusWifi && statusRTC) {
+    updateTime();
+  }
 
-  //NTP
-  timeClient.begin(); 
-  timeClient.setTimeOffset(-8*60*60);
-  
-  currentPalette = RainbowColors_p;
-  currentBlending = LINEARBLEND;
+  if(statusMotor)
+    initialMove();
+
+  myMotor->release();
+  //MoveToStartPosition with initial animation
+
 }
+
+int tempLastMillis = 0;
 
 void loop() {
   ArduinoOTA.handle();
   //nunchuck.readData();
   yield();
-  delay(500);
-  Serial.println("again");
-  FastLED.show();
+  if( millis() >= tempLastMillis + 1000)
+  {
+    tempLastMillis = millis();
+    seconds_now++;
+    if(seconds_now == 60)
+    {
+      seconds_now = 0;
+      minutes_now++;
+      if(minutes_now == 60)
+      {
+        minutes_now = 0;
+        hours_now++;
+        if(hours_now==24)
+          hours_now = 0;
+      }
+    }
+  }
+  if(orientationStepCounter > 0)
+  {
+    myMotor->step(1,orientationDirectionMove, MICROSTEP);
+    orientationStepCounter--;
+    if(orientationStepCounter == 0)
+      myMotor->release();
+  }
+  
+  
+  //Add a GPIO interrupt to update the time
+  //Add a regular animation update with a function at the end to disable sections based on the time
+  //Probably need to add something to set the framerate of the LEDs
+  if(millis() > lastMillisLEDloop + LED_FRAMEMS)
+  {
+    lastMillisLEDloop = millis();
+    updateLEDs();
+  }
 }
 
 // Set the S-5851A sensor up in shutdown mode so it only uses power on the occasional time we decide to measure temperature
@@ -244,7 +270,16 @@ int setupRTC()
     return -1;
   }
   Serial.println("RTC online!");
-  rtc.set24Hour(); 
+  rtc.set24Hour();
+  hours_now = rtc.getHours();
+  minutes_now = rtc.getMinutes();
+  seconds_now = rtc.getSeconds();
+  
+  rtc.disableAllInterrupts();
+  rtc.clearAllInterruptFlags();//Clear all flags in case any interrupts have occurred.
+  rtc.setPeriodicTimeUpdateFrequency(TIME_UPDATE_1_SECOND); //Can also use TIME_UPDATE_1_MINUTE (TIME_UPDATE_1_SECOND = false, TIME_UPDATE_1_MINUTE = true)
+  rtc.enableHardwareInterrupt(UPDATE_INTERRUPT); //The update interrupt needs to have the hardware interrupt enabled to function
+ 
   return 1;
 }
 
@@ -364,6 +399,7 @@ void updateLEDstatus()
 #define SLOWSPEED   100
 #define STARTSPEED  200
 
+
 //Uses the accelerometer and motors to position the clock upright, flashing the lights to indicate the direction it is going
 void pointAccelDown()
 {
@@ -383,7 +419,7 @@ void pointAccelDown()
   float calcBright = 0;
   unsigned long int startMillis = millis();
 
-  while(!finished && millis() <= (startMillis+60000))
+  while(!finished && millis() <= (startMillis+40000))
   {
     if(checkAccelFlag && moveStepperFlag == 0)
     {
@@ -521,6 +557,7 @@ void pointAccelDown()
     yield();
     ArduinoOTA.handle();
   }
+  orientationNow = 0;
 }
 
 // readAccel will read the accelerometer x amount of times and average the result of the y value
@@ -541,4 +578,196 @@ float readAccel(int numOfReads)
   accelValueY /= numOfReads;
 
   return accelValueY;
+}
+
+// Does an NTP read of the time and updates the RTC
+void updateTime()
+{
+  timeClient.begin(); 
+  timeClient.setTimeOffset((-8*60*60) + (DAYLIGHTSAVINGS*60*60));
+
+  timeClient.update();
+  Serial.println("NTP Time:");
+  Serial.println(timeClient.getFormattedTime());
+
+  time_t rawtime = timeClient.getEpochTime();
+  struct tm * ti;
+  ti = localtime(&rawtime);
+
+  hours_now = timeClient.getHours();
+  minutes_now = timeClient.getMinutes();
+  seconds_now = timeClient.getSeconds();
+
+  if (rtc.updateTime() == true) //Updates the time variables from RTC
+  {
+    //String currentDate = rtc.stringDateUSA(); //Get the current date in mm/dd/yyyy format (we're weird)
+    String currentDate = rtc.stringDate(); //Get the current date in dd/mm/yyyy format
+    String currentTime = rtc.stringTime(); //Get the time
+    Serial.println("RTC Date (before update):");
+    Serial.println(currentDate);
+    Serial.println("RTC Time (before update):");
+    Serial.println(currentTime);
+  }
+  else
+  {
+    Serial.print("RTC read failed - Can't update time");
+  }
+  rtc.setTime(seconds_now, minutes_now, hours_now, timeClient.getDay(), ti->tm_mday, ti->tm_mon + 1, ti->tm_year + 1900);
+}
+
+// Fills LEDs through a palette, and then disables them to properly indicate the time.
+void updateLEDs()
+{
+  Serial.println(rtc.stringTime());
+  for(int i=0; i < NUM_LEDS; i++)
+  {
+    leds[i] = CHSV(195,255,255);
+  }
+
+  setLEDsToTime();
+  FastLED.show();
+}
+
+// Blacks out the segments needed to tell the time
+void setLEDsToTime()
+{
+  int offsetHours;
+  //3 chunks of day go from (bottom left) 3:00am - 10:59am, (top) 11:00am - 6:59pm, (bottom right) 7:00pm - 2:59am. Morning, midday, night
+  if(hours_now >= 3 && hours_now < 11) //morning
+  {
+    if(orientationNow != MORNING && orientationStepCounter == 0) // Need to update position, but wait until any previous move is finished
+    {
+      if(orientationNow == MIDDAY)
+      {
+        orientationStepCounter += NUMOFMOTORSTEPS;
+        orientationDirectionMove = FORWARD;
+      } 
+      else if(orientationNow == NIGHT) 
+      {
+        orientationStepCounter += NUMOFMOTORSTEPS;
+        orientationDirectionMove = BACKWARD;
+      }
+      orientationNow = MORNING;
+    }
+    offsetHours = hours_now - 3;
+  } else if( hours_now >= 11 && hours_now < 19) { //midday
+    if(orientationNow != MIDDAY && orientationStepCounter == 0) // Need to update position, but wait until any previous move is finished
+    {
+      if(orientationNow == MORNING)
+      {
+        orientationStepCounter += NUMOFMOTORSTEPS;
+        orientationDirectionMove = BACKWARD;
+      } 
+      else if(orientationNow == NIGHT) 
+      {
+        orientationStepCounter += NUMOFMOTORSTEPS;
+        orientationDirectionMove = FORWARD;
+      }
+      orientationNow = MIDDAY;
+    }
+    offsetHours = hours_now - 11;
+  } else {//night
+    if(orientationNow != NIGHT && orientationStepCounter == 0) // Need to update position, but wait until any previous move is finished
+    {
+      if(orientationNow == MORNING)
+      {
+        orientationStepCounter += NUMOFMOTORSTEPS;
+        orientationDirectionMove = FORWARD;
+      } 
+      else if(orientationNow == MIDDAY) 
+      {
+        orientationStepCounter += NUMOFMOTORSTEPS;
+        orientationDirectionMove = FORWARD;
+      }
+      orientationNow = NIGHT;
+    }
+    if(hours_now >= 19)
+      offsetHours = hours_now - 19;
+    else
+      offsetHours = hours_now + 5;
+  }
+
+  if( ((orientationNow == MIDDAY) && !(0x01 & offsetHours)) || ((orientationNow == MORNING) && !((0x04 & offsetHours)>>2)) || ((orientationNow == NIGHT) && !((0x02 & offsetHours)>>1))  )
+  {
+    turnOffLEDs(7,13);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x02 & offsetHours)>>1)) || ((orientationNow == MORNING) && !(0x01 & offsetHours)) || ((orientationNow == NIGHT) && !((0x04 & offsetHours)>>2))  )
+  {
+    turnOffLEDs(14,20);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x04 & offsetHours)>>2)) || ((orientationNow == MORNING) && !((0x02 & offsetHours)>>1)) || ((orientationNow == NIGHT) && !(0x01 & offsetHours))  )
+  {
+    turnOffLEDs(0,6);
+  }
+  //Minutes
+  if( ((orientationNow == MIDDAY) && !(0x01 & minutes_now)) || ((orientationNow == MORNING) && !((0x08 & seconds_now)>>3)) || ((orientationNow == NIGHT) && !((0x10 & minutes_now)>>4))  )
+  {
+    turnOffLEDs(31,32);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x02 & minutes_now)>>1)) || ((orientationNow == MORNING) && !((0x04 & seconds_now)>>2)) || ((orientationNow == NIGHT) && !((0x20 & minutes_now)>>5))  )
+  {
+    turnOffLEDs(29,30);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x04 & minutes_now)>>2)) || ((orientationNow == MORNING) && !((0x02 & seconds_now)>>1)) || ((orientationNow == NIGHT) && !((0x20 & seconds_now)>>5))  )
+  {
+    turnOffLEDs(27,28);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x08 & minutes_now)>>3)) || ((orientationNow == MORNING) && !(0x01 & seconds_now)) || ((orientationNow == NIGHT) && !((0x10 & seconds_now)>>4))  )
+  {
+    turnOffLEDs(21,22);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x10 & minutes_now)>>4)) || ((orientationNow == MORNING) && !(0x01 & minutes_now)) || ((orientationNow == NIGHT) && !((0x08 & seconds_now)>>3))  )
+  {
+    turnOffLEDs(23,24);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x20 & minutes_now)>>5)) || ((orientationNow == MORNING) && !((0x02 & minutes_now)>>1)) || ((orientationNow == NIGHT) && !((0x04 & seconds_now)>>2))  )
+  {
+    turnOffLEDs(25,26);
+  }
+  //Seconds
+  if( ((orientationNow == MIDDAY) && !(0x01 & seconds_now)) || ((orientationNow == MORNING) && !((0x10 & seconds_now)>>4)) || ((orientationNow == NIGHT) && !((0x08 & minutes_now)>>3))  )
+  {
+    turnOffLEDs(33,34);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x02 & seconds_now)>>1)) || ((orientationNow == MORNING) && !((0x20 & seconds_now)>>5)) || ((orientationNow == NIGHT) && !((0x04 & minutes_now)>>2))  )
+  {
+    turnOffLEDs(35,36);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x04 & seconds_now)>>2)) || ((orientationNow == MORNING) && !((0x20 & minutes_now)>>5)) || ((orientationNow == NIGHT) && !((0x02 & minutes_now)>>1))  )
+  {
+    turnOffLEDs(37,38);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x08 & seconds_now)>>3)) || ((orientationNow == MORNING) && !((0x10 & minutes_now)>>4)) || ((orientationNow == NIGHT) && !(0x01 & minutes_now))  )
+  {
+    turnOffLEDs(39,40);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x10 & seconds_now)>>4)) || ((orientationNow == MORNING) && !((0x08 & minutes_now)>>3)) || ((orientationNow == NIGHT) && !(0x01 & seconds_now))  )
+  {
+    turnOffLEDs(41,42);
+  }
+  if( ((orientationNow == MIDDAY) && !((0x20 & seconds_now)>>5)) || ((orientationNow == MORNING) && !((0x04 & minutes_now)>>2)) || ((orientationNow == NIGHT) && !((0x02 & seconds_now)>>1))  )
+  {
+    turnOffLEDs(43,44);
+  }
+}
+
+//Helper function to set all LEDs between start and endIndex (inclusive) to black
+void turnOffLEDs(int startIndex, int endIndex)
+{
+  for(int i=startIndex; i<=endIndex; i++) {
+    leds[i] = CRGB::Black;
+  }
+}
+
+// Runs after the accel is pointing down, so it has a splashy animation while it cruises to the actual first posision now that the time is known
+void initialMove()
+{
+  if(hours_now >= 3 && hours_now < 11) { //morning
+    myMotor->step(NUMOFMOTORSTEPS, FORWARD, DOUBLE);
+
+  } else if( hours_now >= 11 && hours_now < 19) { //midday
+    //do nothing
+  } else { //night
+    myMotor->step(NUMOFMOTORSTEPS, BACKWARD, DOUBLE);
+  }
 }

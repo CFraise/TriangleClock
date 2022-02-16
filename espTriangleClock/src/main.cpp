@@ -764,10 +764,12 @@ void initialMove()
 {
   if(hours_now >= 3 && hours_now < 11) { //morning
     myMotor->step(NUMOFMOTORSTEPS, FORWARD, DOUBLE);
+    orientationNow = MORNING;
 
   } else if( hours_now >= 11 && hours_now < 19) { //midday
-    //do nothing
+    orientationNow = MIDDAY;
   } else { //night
     myMotor->step(NUMOFMOTORSTEPS, BACKWARD, DOUBLE);
+    orientationNow = NIGHT;
   }
 }

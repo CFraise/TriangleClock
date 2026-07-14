@@ -22,9 +22,11 @@ TriangleClock/             (repo root - this is the only project in the repo, so
 │   ├── main.cpp           setup()/loop(), the ticking clock state, and temp-sensor init/read (see below)
 │   ├── Motor.cpp           stepper + accelerometer self-leveling/orientation (pairs with include/Motor.h)
 │   ├── WiFiOTA.cpp         WiFi/OTA/WebSerial + RTC/NTP time sync (pairs with include/WiFiOTA.h)
-│   └── LEDDisplay.cpp      LED ring rendering + time-to-LED encoding (pairs with include/LEDDisplay.h)
+│   ├── LEDDisplay.cpp      LED ring rendering + time-to-LED encoding (pairs with include/LEDDisplay.h)
+│   └── Debug*.cpp          temporary debug tools, see "Debug tools" section below - to be deleted later
 ├── include/
 │   ├── Motor.h / WiFiOTA.h / LEDDisplay.h   public interface for each src/*.cpp above
+│   ├── Debug*.h            public interface for each src/Debug*.cpp above
 │   └── wifi_credentials.h (+ .example.h)     see WiFi credentials section below
 ├── reference/             non-compiled reference material kept for context, see below
 ├── lib/                   PlatformIO scaffold folder for private/local libraries (unused, default README only)
@@ -121,7 +123,7 @@ Both networks referenced here (`JAMES15` and `BecauseFi`) were shared across the
 
 Once WiFi connects, the firmware serves a browser-based serial console at `http://<device-ip>/webserial` (via [WebSerial](https://github.com/ayushsharma82/WebSerial) + ESPAsyncWebServer), so you can watch debug output — including the whole `pointAccelDown()` self-leveling state machine — without a USB cable, e.g. over the same OTA connection you already use to flash it. The IP address is printed once to `Serial` right after connecting (`setupOTA()`).
 
-Nearly every existing `Serial.print`/`println`/`printf` call was swapped for `logPrint`/`logPrintln`/`logPrintf` (see helper table above), which write to both `Serial` and WebSerial. `updateLEDs()` is the one exception worth knowing about: it logs the time every `LED_FRAMEMS` (10ms), so its WebSerial mirror is throttled to ~1/sec to avoid flooding the websocket — it still logs to `Serial` at full rate as before. Typing in the WebSerial browser console currently just echoes back what you sent (`onWebSerialMessage`); there's no command parsing yet.
+Nearly every existing `Serial.print`/`println`/`printf` call was swapped for `logPrint`/`logPrintln`/`logPrintf` (see helper table above), which write to both `Serial` and WebSerial. `updateLEDs()` is the one exception worth knowing about: it logs the time every `LED_FRAMEMS` (10ms), so its WebSerial mirror is throttled to ~1/sec to avoid flooding the websocket — it still logs to `Serial` at full rate as before. Typing in the WebSerial browser console (or physical Serial) both echo back what you sent and get parsed as a command — see "Debug tools" below.
 
 **Build notes, if you're touching includes or dependencies here:**
 - The platform version had to be pinned to `espressif8266@^4.2.1` (it was previously unpinned, resolving to 3.2.0) — older ESP8266 Arduino cores have a bug ([esp8266/Arduino#7249](https://github.com/esp8266/Arduino/issues/7249)) where `ESP8266WiFi.h`'s `wl_tcp_state` enum collides with lwIP's own TCP state enum once something (here, ESPAsyncWebServer) pulls in `lwip/tcp.h`.
@@ -129,6 +131,20 @@ Nearly every existing `Serial.print`/`println`/`printf` call was swapped for `lo
 - The always-unused `ESP8266WebServer.h`/`DNSServer.h`/`ESP8266mDNS.h` includes (leftover from the pre-split `main.cpp`) were dropped rather than carried into `WiFiOTA.h` — `ESP8266WebServer.h` defines its own `HTTP_GET`/`HTTP_POST`/etc. enum that's ambiguous with ESPAsyncWebServer's identically-named one once both are visible in the same translation unit.
 - WebSerial is licensed AGPL-3.0 (stronger copyleft than this project's other MIT/LGPL dependencies) — only relevant if this firmware is ever distributed rather than just flashed to your own hardware.
 - Flash/RAM usage on the `huzzah` build grew from 33.3%/38.8% to 39.8%/44.8% (of 1,044,464 B flash / 81,920 B RAM) — still well under half, plenty of headroom left.
+
+## Debug tools (temporary — will be removed once tuning is done)
+
+Typed into either the physical Serial monitor or the WebSerial browser console (one command per line), these three mutually-exclusive modes each take over a different slice of the firmware for hands-on tuning. `DebugConsole.cpp` reads the input and tracks which mode (if any) is active; `main.cpp`'s `loop()` checks that mode and either fully hands off to the active tool or (for `TIMETEST`) just swaps out the normal ticker. From `DEBUG_NONE`, send `EXIT` any time to leave whichever mode is active and resume normal operation.
+
+| Command | Mode | What it does |
+|---|---|---|
+| `LEDTEST` | `Motor`/time untouched | Ignores the real clock entirely and cycles the whole 45-LED ring through 10 hue steps at full saturation/brightness, so you can confirm every LED lights up and check colors independent of the time-encoding logic. Sub-commands (send while active): `MINUTES` toggles every other LED in the minutes group (21-32) on/off; `SECONDS` does the same for the seconds group (33-44); `HOURS` cycles the three 7-LED hour groups (0-6/7-13/14-20) through all-on → `0,2,4,6` → `1,4` → all-off → repeat. |
+| `TIMETEST` | LEDs/motor keep running normally | Pauses NTP/RTC as the time source. Send `hh:mm:ss` (e.g. `14:30:00`) to jump straight to a time, or `FAST-N` (e.g. `FAST-100`) to advance the clock N seconds per real second instead of 1 — handy for watching the day cycle (and the 3x/day motor reorientation) play out quickly. `setLEDsToTime()`/`updateLEDs()` and the orientation-driven motor stepping in `loop()` are untouched, so they keep responding to whatever `hours_now`/`minutes_now`/`seconds_now` this mode sets. Exiting resyncs from the RTC via `setupRTC()`. |
+| `ACCELTEST` | LEDs/time untouched | No LED or time changes — just the accelerometer and motor, to help tune `pointAccelDown()`. While idle, reports an instantaneous accelerometer reading plus a ~5-second rolling average roughly twice a second. Send `+N` / `-N` (e.g. `+50`) to step the motor N steps forward/backward one at a time (deliberately slow — a 20ms delay between steps), printing a `[MOVING]`-tagged reading after every single step so you can correlate motor motion with the accelerometer response in real time. |
+
+Each mode's state and command parsing lives entirely in its own `Debug*.cpp`/`.h` pair (`DebugLedTest`, `DebugTimeTest`, `DebugAccelTest`), plus `DebugConsole.cpp` for routing. The only touches to the permanent files are a handful of lines marked `// DEBUG TOOL` in `main.cpp` (the includes, the startup hint, and the `loop()` mode dispatch) and `WiFiOTA.cpp` (one line in `onWebSerialMessage` routing incoming text to the command parser). To remove these tools later: delete `Debug*.cpp`/`Debug*.h` and every line tagged `// DEBUG TOOL`.
+
+A couple of implementation notes: `ACCELTEST`'s `+N`/`-N` move is non-blocking — one microstep per `debugAccelTestTick()` call, paced by `millis()` rather than `delay()`, the same way `main.cpp`'s `loop()` steps the orientation motor one microstep per iteration instead of blocking through a whole reorientation. That keeps `ArduinoOTA`/WebSerial/Serial serviced between steps, so `[MOVING]` readings stream in live instead of arriving all at once after the move finishes. The `MINUTES`/`SECONDS` "half on/half off" pattern blacks out every *other* LED in the group (alternating), not a contiguous first-half/second-half split — easy to change in `DebugLedTest.cpp` if you wanted the other pattern instead.
 
 ## `reference/` — non-compiled reference material
 

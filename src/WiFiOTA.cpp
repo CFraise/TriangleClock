@@ -1,5 +1,6 @@
 #include "WiFiOTA.h"
 #include "wifi_credentials.h"
+#include "DebugConsole.h" // DEBUG TOOL - remove this include + the handleDebugCommand() call below when stripped out
 
 extern int hours_now;
 extern int minutes_now;
@@ -130,6 +131,7 @@ void onWebSerialMessage(uint8_t *data, size_t len)
   for(size_t i = 0; i < len; i++)
     message += char(data[i]);
   logPrintln("Received from WebSerial: " + message);
+  handleDebugCommand(message); // DEBUG TOOL - remove when stripped out
 }
 
 // Does an NTP read of the time and updates the RTC

@@ -5,6 +5,11 @@
 #include <Wire.h>
 #include <S5851A.h>
 #include <time.h>
+// DEBUG TOOL includes - remove these + the "DEBUG TOOL" marked lines in setup()/loop() below when stripped out
+#include "DebugConsole.h"
+#include "DebugLedTest.h"
+#include "DebugTimeTest.h"
+#include "DebugAccelTest.h"
 
 int hours_now;
 int minutes_now;
@@ -70,6 +75,7 @@ void setup() {
   myMotor->release();
   //MoveToStartPosition with initial animation
 
+  logPrintln("Debug tools available: LEDTEST, TIMETEST, ACCELTEST (send EXIT to leave one)."); // DEBUG TOOL - remove when stripped out
 }
 
 int tempLastMillis = 0;
@@ -79,25 +85,39 @@ void loop() {
   ArduinoOTA.handle();
   if(webSerialReady)
     WebSerial.loop();
+  debugConsolePollSerial(); // DEBUG TOOL - remove when stripped out
   //nunchuck.readData();
   yield();
-  if( millis() >= tempLastMillis + 1000)
+
+  // DEBUG TOOL - LEDTEST/ACCELTEST fully take over the loop; remove this block when stripped out
+  if(debugMode == DEBUG_LED)   { debugLedTestTick();   return; }
+  if(debugMode == DEBUG_ACCEL) { debugAccelTestTick(); return; }
+
+  if(debugMode == DEBUG_TIME)
   {
-    tempLastMillis = millis();
-    seconds_now++;
-    if(seconds_now == 60)
+    debugTimeTestTick(); // DEBUG TOOL - replaces the normal ticker below; remove when stripped out
+  }
+  else
+  {
+    if( millis() >= tempLastMillis + 1000)
     {
-      seconds_now = 0;
-      minutes_now++;
-      if(minutes_now == 60)
+      tempLastMillis = millis();
+      seconds_now++;
+      if(seconds_now == 60)
       {
-        minutes_now = 0;
-        hours_now++;
-        if(hours_now==24)
-          hours_now = 0;
+        seconds_now = 0;
+        minutes_now++;
+        if(minutes_now == 60)
+        {
+          minutes_now = 0;
+          hours_now++;
+          if(hours_now==24)
+            hours_now = 0;
+        }
       }
     }
   }
+
   if(orientationStepCounter > 0)
   {
     myMotor->step(1,orientationDirectionMove, MICROSTEP);

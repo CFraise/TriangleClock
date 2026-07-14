@@ -16,7 +16,7 @@ At runtime, the main loop keeps a running clock (incrementing from the RTC-seede
 ## Layout
 
 ```
-espTriangleClock/
+TriangleClock/             (repo root - this is the only project in the repo, so it lives at top level)
 ├── platformio.ini        PlatformIO board/env config + library dependencies
 ├── src/
 │   ├── main.cpp           setup()/loop(), the ticking clock state, and temp-sensor init/read (see below)

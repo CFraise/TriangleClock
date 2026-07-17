@@ -6,7 +6,7 @@ extern int hours_now;
 extern int minutes_now;
 extern int seconds_now;
 
-#define DAYLIGHTSAVINGS 0
+#define DAYLIGHTSAVINGS 1
 
 AsyncWebServer server(80);
 bool webSerialReady = false;

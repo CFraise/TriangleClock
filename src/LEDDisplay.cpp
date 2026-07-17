@@ -76,14 +76,19 @@ void updateLEDstatus()
 // Fills LEDs through a palette, and then disables them to properly indicate the time.
 void updateLEDs()
 {
-  String timeString = rtc.stringTime();
-  Serial.println(timeString);
-  // This runs every LED_FRAMEMS (10ms) - too fast to usefully mirror to WebSerial, so throttle it to ~1/sec
-  static unsigned long lastWebSerialTimeLog = 0;
-  if(webSerialReady && millis() - lastWebSerialTimeLog >= 1000)
+  // This runs every LED_FRAMEMS (10ms) - too fast to usefully log, so throttle it to ~1/sec.
+  // Built from hours_now/minutes_now/seconds_now (the locally-ticking clock main.cpp advances
+  // every second) rather than rtc.stringTime(), which only reflects the one RTC chip read done
+  // at boot in updateTime() and would otherwise print that same stale value forever.
+  static unsigned long lastTimeLog = 0;
+  if(millis() - lastTimeLog >= 1000)
   {
-    lastWebSerialTimeLog = millis();
-    WebSerial.println(timeString);
+    lastTimeLog = millis();
+    char timeBuf[9];
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", hours_now, minutes_now, seconds_now);
+    Serial.println(timeBuf);
+    if(webSerialReady)
+      WebSerial.println(timeBuf);
   }
   for(int i=0; i < NUM_LEDS; i++)
   {
@@ -143,7 +148,7 @@ void setLEDsToTime()
       else if(orientationNow == MIDDAY)
       {
         orientationStepCounter += NUMOFMOTORSTEPS;
-        orientationDirectionMove = FORWARD;
+        orientationDirectionMove = BACKWARD;
       }
       orientationNow = NIGHT;
     }
